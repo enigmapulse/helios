@@ -23,6 +23,8 @@ namespace hft {
           u32 quantity;
           Side side;
 
+        Order()=default;
+
           Order(u64 id, u32 price, u32 quantity, Side side) 
             : id(id), price(price), quantity(quantity), side(side) {}
     };
