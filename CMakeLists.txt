@@ -4,11 +4,13 @@ project(HFT_Engine CXX)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 20)
 
+find_package(Threads REQUIRED)
+
 # packaging core logic into a static library except main.cpp
 file(GLOB_RECURSE HFT_SOURCES CONFIGURE_DEPENDS 
     ${PROJECT_SOURCE_DIR}/src/*.cpp
 )
-list(FILTER HFT_SOURCES EXCLUDE REGEX ".*/main\\.cpp$")
+list(FILTER HFT_SOURCES EXCLUDE REGEX ".*/(main|benchmark)\\.cpp$")
 
 # all those files are compiled into a single package hft_lib
 if(HFT_SOURCES)
@@ -21,7 +23,16 @@ add_executable(hft_engine src/main.cpp)
 target_include_directories(hft_engine PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 if(HFT_SOURCES)
-    target_link_libraries(hft_engine PRIVATE hft_lib)
+    target_link_libraries(hft_engine PRIVATE hft_lib Threads::Threads)
+endif()
+
+add_executable(run_benchmark src/benchmark.cpp)
+target_include_directories(run_benchmark PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
+if(HFT_SOURCES)
+    target_link_libraries(run_benchmark PRIVATE hft_lib Threads::Threads)
+else()
+    target_link_libraries(run_benchmark PRIVATE Threads::Threads)
 endif()
 
 # build google tests alongside

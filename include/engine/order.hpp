@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <map>
 #include <list>
+#include <vector>
 #include <unordered_map>
 #include <algorithm>
 
@@ -29,13 +30,20 @@ namespace hft {
             : id(id), price(price), quantity(quantity), side(side) {}
     };
 
+    struct PriceLevel {
+        u32 price;
+        std::list<Order> orders;
+
+        explicit PriceLevel(u32 p) : price(p) {}
+    };
+
     class OrderBook {
 
     // list to ensure FIFO ordering for same value of price
     // and ensure deletion from middle too if order cancelled
     private:
-        std::map<u32, std::list<Order>, std::greater<u32>> bids;
-        std::map<u32, std::list<Order>, std::less<u32>> asks;
+        std::vector<PriceLevel> bids; // descending
+        std::vector<PriceLevel> asks; // ascending
 
         // lookup Table: maps Order ID -> location in the price list
         std::unordered_map<u64, std::list<Order>::iterator> order_index;
@@ -45,15 +53,31 @@ namespace hft {
         void match_sell(Order& order);
 
     public:
-        OrderBook() = default;
+        OrderBook() {
+            bids.reserve(1024);
+            asks.reserve(1024);
+        }
+
         ~OrderBook() = default;
 
         void add_order(const Order& in_order);
         void cancel_order(u64 order_id);
         
         // Helper methods for GoogleTest validation
-        bool has_bid(u32 price) const { return bids.find(price) != bids.end(); }
-        bool has_ask(u32 price) const { return asks.find(price) != asks.end(); }
-        bool is_tracked(u64 order_id) const { return order_index.find(order_id) != order_index.end(); }
+        bool has_bid(u32 price) const { 
+            auto it = std::lower_bound(bids.begin(), bids.end(), price, 
+                [](const PriceLevel& level, u32 p) { return level.price > p; }); // > for DESC
+            return it != bids.end() && it->price == price; 
+        }
+
+        bool has_ask(u32 price) const { 
+            auto it = std::lower_bound(asks.begin(), asks.end(), price, 
+                [](const PriceLevel& level, u32 p) { return level.price < p; }); // < for ASC
+            return it != asks.end() && it->price == price; 
+        }
+
+        bool is_tracked(u64 order_id) const { 
+            return order_index.find(order_id) != order_index.end(); 
+        }
     };
 }

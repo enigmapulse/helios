@@ -5,8 +5,8 @@ namespace hft {
     void OrderBook::match_buy(Order& order){
         auto it = asks.begin();
         // Outer loop: Traverse the map using the safe iterator pattern
-        while (it != asks.end() && order.quantity > 0 && it->first <= order.price){
-            auto& order_list = it->second;
+        while (it != asks.end() && order.quantity > 0 && it->price <= order.price){
+            auto& order_list = it->orders;
 
             // Inner loop: Strict FIFO Queue handling
             while (!order_list.empty() && order.quantity > 0) {
@@ -22,24 +22,30 @@ namespace hft {
                 }
             }  
             
-            // Safe map erasure
+            // Safe vector erasure
             if (order_list.empty()) it = asks.erase(it);
             else ++it;          
         }
 
         // If not fully filled, add to resting bids and track in index
         if (order.quantity > 0){
-            auto& lst = bids[order.price];
-            lst.push_back(order);
-            order_index[order.id] = std::prev(lst.end());
+            auto it = std::lower_bound(bids.begin(), bids.end(), order.price, 
+                [](const PriceLevel& level, u32 p) { return level.price > p; });
+
+            if (it == bids.end() || it->price != order.price) {
+                it = bids.insert(it, PriceLevel(order.price));
+            }
+
+            it->orders.push_back(order);
+            order_index[order.id] = std::prev(it->orders.end());
         }  
     }
 
     void OrderBook::match_sell(Order& order) {
         auto it = bids.begin();
         // Outer loop: Traverse the map using the safe iterator pattern
-        while (it != bids.end() && order.quantity > 0 && it->first >= order.price) {
-            auto& order_list = it->second;
+        while (it != bids.end() && order.quantity > 0 && it->price >= order.price) {
+            auto& order_list = it->orders;
 
             // Inner loop: Strict FIFO Queue handling
             while (!order_list.empty() && order.quantity > 0) {
@@ -50,12 +56,12 @@ namespace hft {
                 top.quantity -= traded;
 
                 if (top.quantity == 0) {
-                    order_index.erase(top.id); // Keep index in sync
-                    order_list.pop_front();    // Safe, non-iterator deletion
+                    order_index.erase(top.id);
+                    order_list.pop_front();    
                 }
             }
 
-            // Safe map erasure (From Second Implementation)
+            // Safe vector erasure
             if (order_list.empty()) it = bids.erase(it);
             else ++it;
             
@@ -63,9 +69,15 @@ namespace hft {
 
         // If not fully filled, add to resting asks and track in index
         if (order.quantity > 0) {
-            auto& lst = asks[order.price];
-            lst.push_back(order);
-            order_index[order.id] = std::prev(lst.end());
+            auto it = std::lower_bound(asks.begin(), asks.end(), order.price, 
+                [](const PriceLevel& level, u32 p) { return level.price < p; });
+
+            if (it == asks.end() || it->price != order.price) {
+                it = asks.insert(it, PriceLevel(order.price));
+            }
+            
+            it->orders.push_back(order);
+            order_index[order.id] = std::prev(it->orders.end());
         }
     }
 
@@ -94,21 +106,23 @@ namespace hft {
 
         if (side == Side::BUY) {
             // Find price level in bid book safely
-            auto map_it = bids.find(price);
+            auto vec_it = std::lower_bound(bids.begin(), bids.end(), price, 
+                [](const PriceLevel& level, u32 p) { return level.price > p; });
 
-            if (map_it != bids.end()) {
-                map_it->second.erase(list_it);
-                if (map_it->second.empty()) bids.erase(map_it);
+            if (vec_it != bids.end() && vec_it->price == price) {
+                vec_it->orders.erase(list_it); // Erase from the list in O(1)
+                if (vec_it->orders.empty()) bids.erase(vec_it); // Clean up empty level
             }
         } 
         
         else {
             // Same logic for ask side
-            auto map_it = asks.find(price);
+            auto vec_it = std::lower_bound(asks.begin(), asks.end(), price, 
+                [](const PriceLevel& level, u32 p) { return level.price < p; });
 
-            if (map_it != asks.end()) {
-                map_it->second.erase(list_it);
-                if (map_it->second.empty()) asks.erase(map_it);
+            if (vec_it != asks.end() && vec_it->price == price) {
+                vec_it->orders.erase(list_it); // Erase from the list in O(1)
+                if (vec_it->orders.empty()) asks.erase(vec_it); // Clean up empty level
             }
         }
         // Finally, remove the tracking iterator from the index to prevent dangling pointers
