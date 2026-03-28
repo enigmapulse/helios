@@ -95,7 +95,7 @@ namespace hft {
         // Find the order in the lookup table
         // If not found, nothing to cancel
         auto it = order_index.find(order_id);
-
+        
         // Iterator pointing to the order inside the list
         if (it == order_index.end()) return;
         auto list_it = it->second;
@@ -104,27 +104,18 @@ namespace hft {
         u32 price = list_it->price;
         Side side = list_it->side;
 
-        if (side == Side::BUY) {
-            // Find price level in bid book safely
-            auto vec_it = std::lower_bound(bids.begin(), bids.end(), price, 
-                [](const PriceLevel& level, u32 p) { return level.price > p; });
-
-            if (vec_it != bids.end() && vec_it->price == price) {
+        auto remove_from_book = [&](auto& book, auto cmp) {
+            // Find price level in bid book safely (Applies to both bid/ask via lambda)
+            auto vec_it = std::lower_bound(book.begin(), book.end(), price, cmp);
+            if (vec_it != book.end() && vec_it->price == price) {
                 vec_it->orders.erase(list_it); // Erase from the list in O(1)
-                if (vec_it->orders.empty()) bids.erase(vec_it); // Clean up empty level
+                if (vec_it->orders.empty()) book.erase(vec_it); // Clean up empty level
             }
-        } 
-        
-        else {
-            // Same logic for ask side
-            auto vec_it = std::lower_bound(asks.begin(), asks.end(), price, 
-                [](const PriceLevel& level, u32 p) { return level.price < p; });
+        };
 
-            if (vec_it != asks.end() && vec_it->price == price) {
-                vec_it->orders.erase(list_it); // Erase from the list in O(1)
-                if (vec_it->orders.empty()) asks.erase(vec_it); // Clean up empty level
-            }
-        }
+        if (side == Side::BUY) remove_from_book(bids, [](const PriceLevel& l, u32 p) { return l.price > p; });
+        else remove_from_book(asks, [](const PriceLevel& l, u32 p) { return l.price < p; }); // Same logic for ask side
+
         // Finally, remove the tracking iterator from the index to prevent dangling pointers
         order_index.erase(it);
     }
