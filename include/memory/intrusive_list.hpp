@@ -23,6 +23,29 @@ namespace hft {
         IntrusiveList(const IntrusiveList&) = delete;
         IntrusiveList& operator=(const IntrusiveList&) = delete;
 
+        // Allow moving so std::vector can shift PriceLevels around in memory
+        IntrusiveList(IntrusiveList&& other) noexcept 
+            : head_(other.head_), tail_(other.tail_), size_(other.size_) {
+            // Steal the pointers and zero out the old list
+            other.head_ = nullptr;
+            other.tail_ = nullptr;
+            other.size_ = 0;
+        }
+
+        IntrusiveList& operator=(IntrusiveList&& other) noexcept {
+            if (this != &other) {
+                head_ = other.head_;
+                tail_ = other.tail_;
+                size_ = other.size_;
+                
+                // Zero out the old list
+                other.head_ = nullptr;
+                other.tail_ = nullptr;
+                other.size_ = 0;
+            }
+            return *this;
+        }
+
         [[nodiscard]] bool empty() const noexcept { return size_ == 0; }
         [[nodiscard]] size_t size() const noexcept { return size_; }
         
