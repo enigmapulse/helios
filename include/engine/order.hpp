@@ -6,6 +6,9 @@
 #include <vector>
 #include <unordered_map>
 #include <algorithm>
+#include <new>
+#include "memory/memory_pool.hpp"
+#include "memory/intrusive_list.hpp"
 
 namespace hft {
 
@@ -19,20 +22,36 @@ namespace hft {
     };
 
     struct Order {
-          u64 id;
-          u32 price;        // price in ticks instead of floating point
-          u32 quantity;
-          Side side;
+        u64 id;
+        u32 price;        // price in ticks instead of floating point
+        u32 quantity;
+        Side side;
+
+        // Intrusive list pointers
+        Order* prev = nullptr;
+        Order* next = nullptr;
 
         Order()=default;
 
-          Order(u64 id, u32 price, u32 quantity, Side side) 
-            : id(id), price(price), quantity(quantity), side(side) {}
+        Order(u64 id, u32 price, u32 quantity, Side side) 
+        : id(id), price(price), quantity(quantity), side(side) {}
+
+        // static memory pool shared by all orders
+        static MemoryPool<Order, 100000> pool;
+
+        static void* operator new(size_t size) {
+            if (size != sizeof(Order)) throw std::bad_alloc();
+            return pool.allocate(); // O(1) allocation from arena
+        }
+
+        static void operator delete(void* ptr) noexcept {
+            pool.deallocate(ptr); // O(1) return to the free-list
+        }
     };
 
     struct PriceLevel {
         u32 price;
-        std::list<Order> orders;
+        IntrusiveList<Order> orders;
 
         explicit PriceLevel(u32 p) : price(p) {}
     };
@@ -45,8 +64,8 @@ namespace hft {
         std::vector<PriceLevel> bids; // descending
         std::vector<PriceLevel> asks; // ascending
 
-        // lookup Table: maps Order ID -> location in the price list
-        std::unordered_map<u64, std::list<Order>::iterator> order_index;
+        // Maps Order ID directly to the raw memory pool pointer
+        std::unordered_map<u64, Order*> order_index;
 
         // helper functions
         void match_buy(Order& order);

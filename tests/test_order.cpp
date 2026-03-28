@@ -104,3 +104,19 @@ TEST(OrderBookTest, EdgeCases) {
     book.add_order(Order(2, 105, 20, Side::BUY)); // Second one with same ID should be ignored
     EXPECT_FALSE(book.has_bid(105)); // The 105 price level should never be created
 }
+
+TEST(OrderBookTest, VerifiesMemoryPoolUsage) {
+    OrderBook book;
+    
+    size_t initial_blocks = Order::pool.get_stats().available_blocks;
+    book.add_order(Order(999, 100, 10, Side::BUY));
+
+    size_t blocks_after_add = Order::pool.get_stats().available_blocks;
+    EXPECT_EQ(blocks_after_add, initial_blocks - 1) 
+        << "FAIL: The Memory Pool was not used! The OS heap was called.";
+    book.cancel_order(999);
+
+    size_t blocks_after_cancel = Order::pool.get_stats().available_blocks;
+    EXPECT_EQ(blocks_after_cancel, initial_blocks) 
+        << "FAIL: The Memory Pool leaked memory!";
+}

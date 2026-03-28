@@ -2,6 +2,10 @@
 #include <algorithm>
 
 namespace hft {
+
+    // instantiate the static memory pool
+    MemoryPool<Order, 100000> Order::pool;
+
     void OrderBook::match_buy(Order& order){
         auto it = asks.begin();
         // Outer loop: Traverse the map using the safe iterator pattern
@@ -10,15 +14,16 @@ namespace hft {
 
             // Inner loop: Strict FIFO Queue handling
             while (!order_list.empty() && order.quantity > 0) {
-                Order& top = order_list.front();
-                u32 traded = std::min(order.quantity, top.quantity);
+                Order* top = order_list.head();
+                u32 traded = std::min(order.quantity, top->quantity);
 
                 order.quantity -= traded;
-                top.quantity -= traded;
+                top->quantity -= traded;
 
-                if (top.quantity == 0) {
-                    order_index.erase(top.id); // Keep index in sync
+                if (top->quantity == 0) {
+                    order_index.erase(top->id); // Keep index in sync
                     order_list.pop_front();    // Safe, non-iterator deletion
+                    delete top;
                 }
             }  
             
@@ -36,8 +41,9 @@ namespace hft {
                 it = bids.insert(it, PriceLevel(order.price));
             }
 
-            it->orders.push_back(order);
-            order_index[order.id] = std::prev(it->orders.end());
+            Order* resting_order = new Order(order); 
+            it->orders.push_back(resting_order);
+            order_index[resting_order->id] = resting_order;
         }  
     }
 
@@ -49,15 +55,16 @@ namespace hft {
 
             // Inner loop: Strict FIFO Queue handling
             while (!order_list.empty() && order.quantity > 0) {
-                Order& top = order_list.front();
-                u32 traded = std::min(order.quantity, top.quantity);
+                Order* top = order_list.head();
+                u32 traded = std::min(order.quantity, top->quantity);
 
                 order.quantity -= traded;
-                top.quantity -= traded;
+                top->quantity -= traded;
 
-                if (top.quantity == 0) {
-                    order_index.erase(top.id);
+                if (top->quantity == 0) {
+                    order_index.erase(top->id);
                     order_list.pop_front();    
+                    delete top;
                 }
             }
 
@@ -76,8 +83,9 @@ namespace hft {
                 it = asks.insert(it, PriceLevel(order.price));
             }
             
-            it->orders.push_back(order);
-            order_index[order.id] = std::prev(it->orders.end());
+            Order* resting_order = new Order(order);
+            it->orders.push_back(resting_order);
+            order_index[resting_order->id] = resting_order;
         }
     }
 
@@ -98,7 +106,7 @@ namespace hft {
         
         // Iterator pointing to the order inside the list
         if (it == order_index.end()) return;
-        auto list_it = it->second;
+        Order* list_it = it->second;
 
         // We need price + side to locate correct book
         u32 price = list_it->price;
@@ -111,6 +119,7 @@ namespace hft {
                 vec_it->orders.erase(list_it); // Erase from the list in O(1)
                 if (vec_it->orders.empty()) book.erase(vec_it); // Clean up empty level
             }
+            delete list_it;
         };
 
         if (side == Side::BUY) remove_from_book(bids, [](const PriceLevel& l, u32 p) { return l.price > p; });
