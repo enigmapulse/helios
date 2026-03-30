@@ -1,67 +1,128 @@
 #include <iostream>
 #include <thread>
 #include <chrono>
+#include <string>
+#include <cstdlib>
+#include <atomic>
+#include <sched.h>
 #include "concurrency/spsc_queue.hpp"
 #include "engine/order.hpp"
 #include "utils/thread_utils.hpp"
+#include <csignal>
+#include <emmintrin.h>
 
 using namespace hft;
 
+
+// Global atomic flag for the kill switch
+std::atomic<bool> keep_running{true};
+
+// Signal handler to catch Ctrl+C
+void handle_sigint(int sig) {
+    keep_running.store(false, std::memory_order_release);
+}
+
 // Simulated Network Gateway (The Producer)
-void network_gateway_loop(SPSCQueue<Order, 1024>& ring_buffer) {
-    uint64_t next_order_id = 1;
-    
+void network_gateway_loop(SPSCQueue<Order, 1024>& ring_buffer, uint64_t total_orders, std::atomic<bool>& start_flag) {
     std::cout << "[Gateway] Listening for network traffic...\n";
+    
+    while (!start_flag.load(std::memory_order_acquire)) _mm_pause();
+    
+    uint64_t next_order_id = 1;
 
-    while (true) {
-        // 1. Simulate receiving an order from the network
-        Order new_order(next_order_id++, 50000, 10, Side::BUY);
+    while (next_order_id <= total_orders) {
+        
+        // Using the bitwise micro-optimization
+        Side side = ((next_order_id & 1) == 0) ? Side::SELL : Side::BUY;
+        Order new_order(next_order_id++, 50000, 10, side);
 
-        // 2. Push to the lock-free queue (Spinlock if full)
         while (!ring_buffer.push(new_order)) {
-            // In a real engine, we might yield or pause here, 
-            // but for HFT we just aggressively spin-wait.
+            // COLD PATH: Only check the kill switch if the queue is full
+            if (!keep_running.load(std::memory_order_relaxed)) return;
+            _mm_pause();
         }
-
-        // 3. Sleep for a millisecond just so we don't blow up your terminal 
-        // while you try to watch htop
-        // std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 }
 
-int main() {
-    std::cout << "=== Starting HFT Matching Engine ===\n";
+// --- CONSUMER: The Actual Matching Engine ---
+void matching_engine_loop(SPSCQueue<Order, 1024>& ring_buffer, OrderBook& book, uint64_t total_orders, std::atomic<bool>& start_flag) {
+    while (!start_flag.load(std::memory_order_acquire)) _mm_pause();
 
-    // Initialize our lock-free message bus
-    SPSCQueue<Order, 1024> engine_queue;
-
-    // 1. Spawn the Gateway (Producer) thread
-    std::thread gateway_thread(network_gateway_loop, std::ref(engine_queue));
-
-    // 2. PIN IT TO CORE 1
-    // (Note: Cores are 0-indexed. Core 0 is your OS core. Core 1 is the 2nd core).
-    if (utils::pin_thread_to_core(gateway_thread, 1)) {
-        std::cout << "[System] Gateway thread successfully pinned to CPU Core 1.\n";
+    Order incoming;
+    uint64_t processed = 0;
+    
+    while (!ring_buffer.pop(incoming)) {
+        if (!keep_running.load(std::memory_order_relaxed)) return;
+        _mm_pause();
     }
 
-    // 3. Dummy Consumer to drain the queue so it doesn't instantly fill up
-    std::thread dummy_engine_thread([&]() {
-        Order incoming;
-        while (true) {
-            if (engine_queue.pop(incoming)) {
-                // (In Issue #10, we will hook this up to your OrderBook!)
-            }
+    auto start = std::chrono::high_resolution_clock::now();
+    
+    book.add_order(incoming);
+    processed++;
+
+    while (processed < total_orders) {
+        // HOT PATH: If pop succeeds, process immediately.
+        if (ring_buffer.pop(incoming)) {
+            book.add_order(incoming);
+            processed++;
+        } else {
+            // COLD PATH: Only check the kill switch if the queue is empty
+            if (!keep_running.load(std::memory_order_relaxed)) break; 
+            _mm_pause(); 
         }
-    });
+    }
+    
+    auto end = std::chrono::high_resolution_clock::now();
+    
+    auto duration_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+    if (duration_ns == 0) duration_ns = 1; 
 
-    // We also want to pin the matching engine to Core 2 so they don't fight!
-    if (utils::pin_thread_to_core(dummy_engine_thread, 2)) {
-        std::cout << "[System] Matching Engine thread successfully pinned to CPU Core 2.\n";
+    double ops_per_sec = (static_cast<double>(processed) / duration_ns) * 1'000'000'000.0;
+    
+    std::cout << "\n[Engine] Processed " << processed << " orders in " 
+              << (duration_ns / 1'000'000.0) << " ms (" << duration_ns << " ns).\n";
+    std::cout << "[Engine] Throughput: " << static_cast<uint64_t>(ops_per_sec) << " ops/sec.\n";
+    std::cout << "[Engine] Final Engine Core: " << sched_getcpu() << "\n";
+}
+
+int main(int argc, char* argv[]) {
+    uint64_t target_orders = 10'000'000; 
+    if (argc > 1) {
+        try { target_orders = std::stoull(argv[1]); } 
+        catch (...) { std::cerr << "[ERROR] Invalid count. Using 10M.\n"; }
     }
 
-    // Wait forever
+    std::cout << "=== Starting HFT Matching Engine (Isolated Core Mode) ===\n";
+    std::signal(SIGINT, handle_sigint);
+    // The Starting Flag
+    std::atomic<bool> start_flag{false};
+
+    SPSCQueue<Order, 1024> engine_queue;
+    OrderBook limit_order_book;
+
+    std::thread gateway_thread(network_gateway_loop, std::ref(engine_queue), target_orders, std::ref(start_flag));
+    std::thread engine_thread(matching_engine_loop, std::ref(engine_queue), std::ref(limit_order_book), target_orders, std::ref(start_flag));
+
+    // Core 0 reserved for OS, 1=producer, 2=consumer
+    utils::pin_thread_to_core(gateway_thread, 1);
+    utils::pin_thread_to_core(engine_thread, 2);
+    
+    //REALTIME FALLBACK LOGIC
+    if (!utils::set_realtime_priority(engine_thread)) {
+        std::cout << "[INFO] Running without RT priority (Standard OS Scheduling)\n";
+        std::cout << "[INFO] Tip: Run with 'sudo' to achieve true SCHED_FIFO isolation.\n";
+    } else {
+        std::cout << "[System] Engine thread elevated to SCHED_FIFO Real-Time priority.\n";
+    }
+
+    std::cout << "[System] OS configuration complete. Pulling the trigger on " << target_orders << " Orders...\n";
+
+    //Release both threads simultaneously
+    start_flag.store(true, std::memory_order_release);
+
     gateway_thread.join();
-    dummy_engine_thread.join();
+    engine_thread.join();
 
     return 0;
 }
