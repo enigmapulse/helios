@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <atomic>
 #include <sched.h>
+#include "utils/timer.hpp"
 #include "concurrency/spsc_queue.hpp"
 #include "engine/order.hpp"
 #include "utils/thread_utils.hpp"
@@ -37,6 +38,8 @@ void network_gateway_loop(SPSCQueue<Order, 1024>& ring_buffer, uint64_t total_or
         u32 price = static_cast<u32>(49990 + (next_order_id % 20));
         Order new_order(next_order_id++, price, 10, side);
 
+        new_order.timestamp = utils::get_nanoseconds();
+
         while (!ring_buffer.push(new_order)) {
             // COLD PATH: Only check the kill switch if the queue is full
             if (!keep_running.load(std::memory_order_relaxed)) return;
@@ -62,11 +65,24 @@ void matching_engine_loop(SPSCQueue<Order, 1024>& ring_buffer, OrderBook& book, 
     book.add_order(incoming);
     processed++;
 
+    uint64_t final_order_latency = 0;
+
     while (processed < total_orders) {
         // HOT PATH: If pop succeeds, process immediately.
         if (ring_buffer.pop(incoming)) {
+
+            uint64_t start_process_ts = 0;
+            if (processed == total_orders - 1) {
+                start_process_ts = utils::get_nanoseconds();
+            }
+
             book.add_order(incoming);
             processed++;
+
+            if (processed == total_orders) {
+                uint64_t end_ts = utils::get_nanoseconds();
+                final_order_latency = end_ts - start_process_ts;
+            }
         } else {
             // COLD PATH: Only check the kill switch if the queue is empty
             if (!keep_running.load(std::memory_order_relaxed)) break; 
@@ -84,6 +100,9 @@ void matching_engine_loop(SPSCQueue<Order, 1024>& ring_buffer, OrderBook& book, 
     std::cout << "\n[Engine] Processed " << processed << " orders in " 
               << (duration_ns / 1'000'000.0) << " ms (" << duration_ns << " ns).\n";
     std::cout << "[Engine] Throughput: " << static_cast<uint64_t>(ops_per_sec) << " ops/sec.\n";
+    std::cout << "[Engine] Final Engine Core: " << sched_getcpu() << "\n";
+
+    std::cout << "[Engine] End-to-End Latency (Last Order): " << final_order_latency << " ns.\n";
     std::cout << "[Engine] Final Engine Core: " << sched_getcpu() << "\n";
 }
 

@@ -27,6 +27,8 @@ namespace hft {
         u32 quantity;
         Side side;
 
+        u64 timestamp = 0;
+
         // Intrusive list pointers
         Order* prev = nullptr;
         Order* next = nullptr;
