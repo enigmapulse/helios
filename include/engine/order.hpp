@@ -77,7 +77,7 @@ namespace hft {
             asks.reserve(1024);
         }
 
-        ~OrderBook() = default;
+        ~OrderBook();
 
         void add_order(const Order& in_order);
         void cancel_order(u64 order_id);

@@ -34,7 +34,8 @@ void network_gateway_loop(SPSCQueue<Order, 1024>& ring_buffer, uint64_t total_or
         
         // Using the bitwise micro-optimization
         Side side = ((next_order_id & 1) == 0) ? Side::SELL : Side::BUY;
-        Order new_order(next_order_id++, 50000, 10, side);
+        u32 price = static_cast<u32>(49990 + (next_order_id % 20));
+        Order new_order(next_order_id++, price, 10, side);
 
         while (!ring_buffer.push(new_order)) {
             // COLD PATH: Only check the kill switch if the queue is full

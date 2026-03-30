@@ -4,6 +4,20 @@ project(HFT_Engine CXX)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 20)
 
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
+add_compile_options(
+    $<$<CONFIG:Release>:-O3>
+    $<$<CONFIG:Release>:-march=native>
+    $<$<CONFIG:Release>:-flto>
+    $<$<CONFIG:Release>:-fno-omit-frame-pointer>  # keeps perf/flamegraph usable
+)
+add_link_options(
+    $<$<CONFIG:Release>:-flto>
+)
+
 find_package(Threads REQUIRED)
 
 # packaging core logic into a static library except main.cpp

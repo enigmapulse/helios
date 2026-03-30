@@ -6,6 +6,15 @@ namespace hft {
     // instantiate the static memory pool
     MemoryPool<Order, 100000> Order::pool;
 
+    OrderBook::~OrderBook() {
+        for (auto& [id, ptr] : order_index) {
+            Order::pool.deallocate(ptr);
+        }
+        order_index.clear();
+        bids.clear();
+        asks.clear();
+    }
+
     void OrderBook::match_buy(Order& order){
         auto it = asks.begin();
         // Outer loop: Traverse the map using the safe iterator pattern
@@ -120,6 +129,7 @@ namespace hft {
                 if (vec_it->orders.empty()) book.erase(vec_it); // Clean up empty level
             }
             delete list_it;
+            list_it = nullptr;
         };
 
         if (side == Side::BUY) remove_from_book(bids, [](const PriceLevel& l, u32 p) { return l.price > p; });
